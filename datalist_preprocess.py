@@ -58,7 +58,8 @@ def reduce2n(idlist, n):
 			prev = curr
 	return new_ids
 
-txt2list('txt2', 3)
+if 'name' == '__main__':
+	txt2list('txt2', 3)
 
 
 
