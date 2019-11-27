@@ -3,17 +3,24 @@ import os
 def parse_metafile(meta_file):
     """
     :param meta_file: string
-    :return: dictionary
+    :return: celeb_ids: dictionary | format: {VoxCeleb1 ID: VGGFace1 ID, ...}
     """
     with open(meta_file, 'r') as f:
         lines = f.readlines()[1:]
     celeb_ids = {}
     for line in lines:
+        # VoxCeleb1 ID, VGGFace1 ID, Gender, Nationality, Set
         ID, name, _, _, _ = line.rstrip().split('\t')
         celeb_ids[ID] = name
     return celeb_ids
 
 def get_labels(voice_list, face_list):
+    """ Take intersection between VoxCeleb1 and VGGFace1,
+    and reorder pair with number starting from 0
+    :param voice_list:
+    :param face_list:
+    :return:
+    """
     voice_names = {item['name'] for item in voice_list}
     face_names = {item['name'] for item in face_list}
     names = voice_names & face_names  # s.intersection(t) ==> s & t
@@ -29,6 +36,7 @@ def get_labels(voice_list, face_list):
     
 
 def get_dataset_files(data_dir, data_ext, celeb_ids, split):
+    # data_list format: [{'filepath': filepath, 'name': celeb_name}, {...}, ...]
     data_list = []
     # read data directory
     for root, dirs, filenames in os.walk(data_dir):

@@ -8,7 +8,7 @@ from config import DATASET_PARAMETERS, NETWORKS_PARAMETERS
 from parse_dataset import get_dataset
 from network import get_network
 from utils import Meter, cycle, save_model
-
+from loss import *
 
 # dataset and dataloader
 print('Parsing your dataset...')
@@ -35,84 +35,144 @@ face_iterator = iter(cycle(face_loader))
 
 # networks, Fe, Fg, Fd (f+d), Fc (f+c)
 print('Initializing networks...')
-e_net, e_optimizer = get_network('e', NETWORKS_PARAMETERS, train=False)
-g_net, g_optimizer = get_network('g', NETWORKS_PARAMETERS, train=True)
+e_net, e_optimizer = get_network('e', NETWORKS_PARAMETERS, train=False)  # voice embedding
+# g_net, g_optimizer = get_network('g', NETWORKS_PARAMETERS, train=True)
 f_net, f_optimizer = get_network('f', NETWORKS_PARAMETERS, train=True)
-d_net, d_optimizer = get_network('d', NETWORKS_PARAMETERS, train=True)
-c_net, c_optimizer = get_network('c', NETWORKS_PARAMETERS, train=True)
+g_net, g_optimizer = get_network('u', NETWORKS_PARAMETERS, train=True)  # unet
+d_net, d_optimizer = get_network('d', NETWORKS_PARAMETERS, train=True)  # discriminator
+c_net, c_optimizer = get_network('c', NETWORKS_PARAMETERS, train=True)  # classifier, train=False
+
+d_scheduler = torch.optim.lr_scheduler.StepLR(d_optimizer, step_size=1, gamma=0.96)
+g_scheduler = torch.optim.lr_scheduler.StepLR(g_optimizer, step_size=1, gamma=0.96)
 
 # label for real/fake faces
-real_label = torch.full((DATASET_PARAMETERS['batch_size'], 1), 1)
-fake_label = torch.full((DATASET_PARAMETERS['batch_size'], 1), 0)
+# real_label = torch.full((DATASET_PARAMETERS['batch_size'], 1), 1)
+# fake_label = torch.full((DATASET_PARAMETERS['batch_size'], 1), 0)
 
 # Meters for recording the training status
 iteration = Meter('Iter', 'sum', ':5d')
 data_time = Meter('Data', 'sum', ':4.2f')
 batch_time = Meter('Time', 'sum', ':4.2f')
+
 D_real = Meter('D_real', 'avg', ':3.2f')
 D_fake = Meter('D_fake', 'avg', ':3.2f')
 C_real = Meter('C_real', 'avg', ':3.2f')
 GD_fake = Meter('G_D_fake', 'avg', ':3.2f')
 GC_fake = Meter('G_C_fake', 'avg', ':3.2f')
+G_l2_fake = Meter('G_l2_fake', 'avg', ':3.2f')
+""" """
 
 print('Training models...')
-for it in range(50000):
+for it in range(DATASET_PARAMETERS['num_batches']):
     # data
     start_time = time.time()
-    
-    voice, voice_label = next(voice_iterator)
-    face, face_label = next(face_iterator)
-    noise = 0.05*torch.randn(DATASET_PARAMETERS['batch_size'], 64, 1, 1)
+
+    voiceB, voiceB_label = next(voice_iterator)
+    faceA, faceA_label = next(face_iterator)  # real face
+    # TODO: since voiceB and faceA in different identities,
+    #  need to reuse load_voice and load_face to get corresponding faceB and voiceA
+    # noise = 0.05 * torch.randn(DATASET_PARAMETERS['batch_size'], 64, 1, 1)  # shape 4d!
 
     # use GPU or not
-    if NETWORKS_PARAMETERS['GPU']: 
-        voice, voice_label = voice.cuda(), voice_label.cuda()
-        face, face_label = face.cuda(), face_label.cuda()
-        real_label, fake_label = real_label.cuda(), fake_label.cuda()
-        noise = noise.cuda()
+    if NETWORKS_PARAMETERS['GPU']:
+        voiceB, voiceB_label = voiceB.cuda(), voiceB_label.cuda()
+        faceA, faceA_label = faceA.cuda(), faceA_label.cuda()
+        # real_label, fake_label = real_label.cuda(), fake_label.cuda()
+        # noise = noise.cuda()
     data_time.update(time.time() - start_time)
 
-    # get embeddings and generated faces
-    embeddings = e_net(voice)
-    embeddings = F.normalize(embeddings)
-    # introduce some permutations
-    embeddings = embeddings + noise
-    embeddings = F.normalize(embeddings)
-    fake = g_net(embeddings)
+    # TODO: scale the input images, notice when inference ??
+    # scaled_images = face * 2 - 1
 
-    # Discriminator
-    f_optimizer.zero_grad()
-    d_optimizer.zero_grad()
+    # get voice embeddings
+    embedding_B = e_net(voiceB)
+    embedding_B = F.normalize(embedding_B).view(embedding_B.size()[0], -1)
+    # introduce some permutations to voice --> deprecated
+    # embeddings = embeddings + noise
+    # embeddings = F.normalize(embeddings)
+
+    # 0. get generated faces
+    fake_faceB = g_net(faceA, embedding_B)
+    # TODO: introduce some permutations to image !!!
+
+    # ============================================
+    #            TRAIN THE DISCRIMINATOR
+    # ============================================
+
+    # d_optimizer.zero_grad()
     c_optimizer.zero_grad()
-    real_score_out = d_net(f_net(face))
-    fake_score_out = d_net(f_net(fake.detach()))
-    real_label_out = c_net(f_net(face))
-    D_real_loss = F.binary_cross_entropy(torch.sigmoid(real_score_out), real_label)
-    D_fake_loss = F.binary_cross_entropy(torch.sigmoid(fake_score_out), fake_label)
-    C_real_loss = F.nll_loss(F.log_softmax(real_label_out, 1), face_label)
+
+    # 1. Train with real images
+    D_real = d_net(f_net(faceA))
+    D_real_loss = true_D_loss(D_real)
+
+    # 2. Train with fake images
+    D_fake = d_net(f_net(fake_faceB.detach()))
+    # D_fake = d_net(f_net(fake_face))  # TODO: is detach necessary here ???
+    D_fake_loss = fake_D_loss(D_fake)
+
+    # 3. Train with identity / gender classification
+    real_classification = c_net(f_net(faceA))
+    C_real_loss = identity_D_loss(real_classification, faceA_label)
+    # C_real_loss = F.nll_loss(F.log_softmax(real_classification, 1), face_label)  # TODO: why this loss?
+
+    # D_real_loss = F.binary_cross_entropy(torch.sigmoid(D_real), real_label)
+    # D_fake_loss = F.binary_cross_entropy(torch.sigmoid(D_fake), fake_label)
+
+    # update meters
     D_real.update(D_real_loss.item())
     D_fake.update(D_fake_loss.item())
     C_real.update(C_real_loss.item())
-    (D_real_loss + D_fake_loss + C_real_loss).backward()
-    f_optimizer.step()
-    d_optimizer.step()
-    c_optimizer.step()
 
-    # Generator
+    # backprop
+    D_loss = D_real_loss + D_fake_loss + C_real_loss
+    D_loss.backward()
+    f_optimizer.step()
+    c_optimizer.step()
+    if it % 10 == 0:
+        d_optimizer.step()
+        d_optimizer.zero_grad()
+
+    # =========================================
+    #            TRAIN THE GENERATOR
+    # =========================================
     g_optimizer.zero_grad()
-    fake_score_out = d_net(f_net(fake))
-    fake_label_out = c_net(f_net(fake))
-    GD_fake_loss = F.binary_cross_entropy(torch.sigmoid(fake_score_out), real_label)
-    GC_fake_loss = F.nll_loss(F.log_softmax(fake_label_out, 1), voice_label)
-    (GD_fake_loss + GC_fake_loss).backward()
-    GD_fake.update(GD_fake_loss.item())
-    GC_fake.update(GC_fake_loss.item())
+
+    # 1. Train with discriminator
+    D_fake = d_net(f_net(fake_faceB))
+    D_fake_loss = true_D_loss(D_fake)
+
+    # 2. Train with classifier
+    fake_classfication = c_net(f_net(fake_faceB))
+    C_fake_loss = identity_D_loss(real_classification, voiceB_label)
+    # C_fake_loss = F.nll_loss(F.log_softmax(fake_classfication, 1), voice_label)
+
+    # GD_fake_loss = F.binary_cross_entropy(torch.sigmoid(D_fake), real_label)
+    # GC_fake_loss = F.nll_loss(F.log_softmax(fake_classfication, 1), voice_label)
+
+    # 3. Train with L2 loss
+    # TODO: l2 here necessary ??  faceA needs to be changed to faceB
+    l2loss = l2_loss_G(fake_faceB, faceA)
+    # l2loss = l2_loss_G(fake_faceB, faceB)
+
+    # 4. Train with consistency loss
+    # TODO: to be tested, after getting embedding_A and
+    # scaled_fake = fake_face * 2 - 1
+    # fake_faceA = g_net(fake_faceB, embedding_A)
+    # consistency_loss = l2_loss_G(fake_faceA, faceA)
+
+    # backprop
+    G_loss = D_fake_loss + C_fake_loss + l2loss
+    G_loss.backward()
+    GD_fake.update(D_fake_loss.item())
+    GC_fake.update(C_fake_loss.item())
+    G_l2_fake.update(l2loss.item())
     g_optimizer.step()
 
     batch_time.update(time.time() - start_time)
 
     # print status
-    if it % 200 == 0:
+    if it % NETWORKS_PARAMETERS['print_stat_freq'] == 0:
         print(iteration, data_time, batch_time, 
               D_real, D_fake, C_real, GD_fake, GC_fake)
         data_time.reset()
@@ -125,5 +185,14 @@ for it in range(50000):
 
         # snapshot
         save_model(g_net, NETWORKS_PARAMETERS['g']['model_path'])
+
+    # save model for debugging purpose
+    if min_g_loss == None or G_loss < min_g_loss:
+        min_g_loss = G_loss
+        torch.save(g_net, 'G.pt')
+    if min_g_loss == None or D_loss < min_d_loss:
+        min_g_loss = D_loss
+        torch.save(d_net, 'FD.pt')
+
     iteration.update(1)
 
