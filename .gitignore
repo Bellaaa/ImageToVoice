@@ -1,5 +1,9 @@
+# configuration files and temporary files
 .DS_Store
 .idea/*
 *.pth
-test_lulan.ipynb
 .ipynb_checkpoints/*
+
+# testing code
+config2.py
+*.ipynb

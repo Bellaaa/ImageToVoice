@@ -38,7 +38,7 @@ class Conv2dWMask(nn.Module):
         self.blinear = SigmoidLinearMask(self.bshape, embedding_dim)
 
     def forward(self, x, embedding):
-        # shape of voice_embedding: (1, 64)
+        # shape of voice_embedding: (batch_size, 64)
         """
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         if gender == 'm':
@@ -46,6 +46,8 @@ class Conv2dWMask(nn.Module):
         elif gender == 'f':
             gender = -1 * torch.ones((1)).to(device)
         """
+        embedding = torch.mean(embedding, dim=0)  # TODO: can NOT use mean function!
+
         new_weight = self.wlinear(self.conv.weight, embedding)
         new_b = self.blinear(self.conv.bias, embedding)
         output = F.conv2d(x, new_weight, new_b, padding=self.conv.padding)
@@ -75,7 +77,7 @@ class DoubleConv(nn.Module):
             self.double_conv = self.double_conv(in_channels, out_channels)
         """
 
-    def forward(self, x, embedding):
+    def forward(self, x, embedding=None):
         if self.mode == 'down':
             return self.double_conv(x)
         else:
@@ -150,6 +152,12 @@ class Up(nn.Module):
         self.conv = DoubleConv(in_channels, out_channels, mode='up')
 
     def forward(self, x1, x2, label):
+        """
+        :param x1:
+        :param x2:
+        :param label: could be gender scalar or voice embedding vector (batch_size x [scalar or vector])
+        :return:
+        """
         x1 = self.up(x1)
         # input is CHW
         diffY = x2.size()[2] - x1.size()[2]
@@ -173,7 +181,7 @@ class Up(nn.Module):
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
 
         x = torch.cat([x2, x1], dim=1)
-        return self.conv(x, mode='up', embedding=label)
+        return self.conv(x, embedding=label)
 
 
 class OutConv(nn.Module):

@@ -11,14 +11,14 @@ DATASET_PARAMETERS = {
     'print_stat_freq': 50,
 
     # meta data provided by voxceleb1 dataset
-    'meta_file': '/home/cmuwonderfour/data/vox1_meta.csv',
+    'meta_file': 'data/vox1_meta.csv',
 
     # voice dataset
-    'voice_dir': '/home/cmuwonderfour/data/fbank',
+    'voice_dir': 'data/fbank',
     'voice_ext': 'npy',
 
     # face dataset
-    'face_dir': '/home/cmuwonderfour/data/VGG_ALL_FRONTAL',
+    'face_dir': 'data/VGG_ALL_FRONTAL',
     'face_ext': '.jpg',
 
     # train data includes the identities
@@ -28,7 +28,7 @@ DATASET_PARAMETERS = {
     # dataloader
     'voice_dataset': VoiceDataset,
     'face_dataset': FaceDataset,
-    'batch_size': 128,
+    'batch_size': 64,
     'nframe_range': [300, 800],
     'workers_num': 1,
     'collate_fn': get_collate_fn,
@@ -40,7 +40,7 @@ DATASET_PARAMETERS = {
          ]),
 
     # test data
-    'test_data': '/home/cmuwonderfour/data/test_data/'
+    'test_data': 'data/test_data/'
 }
 
 
@@ -88,7 +88,7 @@ NETWORKS_PARAMETERS = {
         'model_path': 'models/generator.pth',
     },
     # FACE EMBEDDING NETWORK (f)
-    # TODO: NO USE
+    # TODO: trainable to fixed
     'f': {
         'network': FaceEmbedNet,
         'input_channel': 3,

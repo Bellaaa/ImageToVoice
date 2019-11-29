@@ -9,10 +9,11 @@ from parse_dataset import get_dataset
 from network import get_network
 from utils import Meter, cycle, save_model
 from loss import *
+from dataset import reload_batch_face, reload_batch_voice
 
 # dataset and dataloader
 print('Parsing your dataset...')
-voice_list, face_list, id_class_num = get_dataset(DATASET_PARAMETERS)
+voice_list, face_list, id_class_num, voice_dict, face_dict = get_dataset(DATASET_PARAMETERS)
 NETWORKS_PARAMETERS['c']['output_channel'] = id_class_num
 
 print('Preparing the datasets...')
@@ -54,29 +55,37 @@ iteration = Meter('Iter', 'sum', ':5d')
 data_time = Meter('Data', 'sum', ':4.2f')
 batch_time = Meter('Time', 'sum', ':4.2f')
 
-D_real = Meter('D_real', 'avg', ':3.2f')
-D_fake = Meter('D_fake', 'avg', ':3.2f')
-C_real = Meter('C_real', 'avg', ':3.2f')
-GD_fake = Meter('G_D_fake', 'avg', ':3.2f')
-GC_fake = Meter('G_C_fake', 'avg', ':3.2f')
-G_l2_fake = Meter('G_l2_fake', 'avg', ':3.2f')
+meter_D_real = Meter('D_real', 'avg', ':3.2f')
+meter_D_fake = Meter('D_fake', 'avg', ':3.2f')
+meter_C_real = Meter('C_real', 'avg', ':3.2f')
+meter_GD_fake = Meter('G_D_fake', 'avg', ':3.2f')
+meter_GC_fake = Meter('G_C_fake', 'avg', ':3.2f')
+meter_G_L2_fake = Meter('G_l2_fake', 'avg', ':3.2f')
 """ """
 
 print('Training models...')
+min_g_loss = None
+min_d_loss = None
 for it in range(DATASET_PARAMETERS['num_batches']):
     # data
     start_time = time.time()
 
     voiceB, voiceB_label = next(voice_iterator)
     faceA, faceA_label = next(face_iterator)  # real face
+
     # TODO: since voiceB and faceA in different identities,
     #  need to reuse load_voice and load_face to get corresponding faceB and voiceA
+    faceB_items = [face_dict[v_label.item()] for v_label in voiceB_label]
+    voiceA_items = [voice_dict[f_label.item()] for f_label in faceA_label]
+    faceB = reload_batch_face(faceB_items)
+    voiceA = reload_batch_voice(voiceA_items, DATASET_PARAMETERS['nframe_range'][1])
     # noise = 0.05 * torch.randn(DATASET_PARAMETERS['batch_size'], 64, 1, 1)  # shape 4d!
 
     # use GPU or not
     if NETWORKS_PARAMETERS['GPU']:
         voiceB, voiceB_label = voiceB.cuda(), voiceB_label.cuda()
         faceA, faceA_label = faceA.cuda(), faceA_label.cuda()
+        faceB, voiceA = faceB.cuda(), voiceA.cuda()
         # real_label, fake_label = real_label.cuda(), fake_label.cuda()
         # noise = noise.cuda()
     data_time.update(time.time() - start_time)
@@ -103,29 +112,29 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     c_optimizer.zero_grad()
 
     # 1. Train with real images
-    D_real = d_net(f_net(faceA))
-    D_real_loss = true_D_loss(D_real)
+    D_real_A = d_net(f_net(faceA))
+    D_real_A_loss = true_D_loss(torch.sigmoid(D_real_A))
 
     # 2. Train with fake images
-    D_fake = d_net(f_net(fake_faceB.detach()))
+    D_fake_B = d_net(f_net(fake_faceB.detach()))
     # D_fake = d_net(f_net(fake_face))  # TODO: is detach necessary here ???
-    D_fake_loss = fake_D_loss(D_fake)
+    D_fake_B_loss = fake_D_loss(torch.sigmoid(D_fake_B))
 
     # 3. Train with identity / gender classification
     real_classification = c_net(f_net(faceA))
-    C_real_loss = identity_D_loss(real_classification, faceA_label)
+    C_real_loss = identity_D_loss(F.log_softmax(real_classification, dim=1), faceA_label)
     # C_real_loss = F.nll_loss(F.log_softmax(real_classification, 1), face_label)  # TODO: why this loss?
 
     # D_real_loss = F.binary_cross_entropy(torch.sigmoid(D_real), real_label)
     # D_fake_loss = F.binary_cross_entropy(torch.sigmoid(D_fake), fake_label)
 
     # update meters
-    D_real.update(D_real_loss.item())
-    D_fake.update(D_fake_loss.item())
-    C_real.update(C_real_loss.item())
+    meter_D_real.update(D_real_A_loss.item())
+    meter_D_fake.update(D_fake_B_loss.item())
+    meter_C_real.update(C_real_loss.item())
 
     # backprop
-    D_loss = D_real_loss + D_fake_loss + C_real_loss
+    D_loss = D_real_A_loss + D_fake_B_loss + C_real_loss
     D_loss.backward()
     f_optimizer.step()
     c_optimizer.step()
@@ -139,49 +148,52 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     g_optimizer.zero_grad()
 
     # 1. Train with discriminator
-    D_fake = d_net(f_net(fake_faceB))
-    D_fake_loss = true_D_loss(D_fake)
+    D_fake_B = d_net(f_net(fake_faceB))
+    D_fake_B_loss = true_D_loss(torch.sigmoid(D_fake_B))
 
     # 2. Train with classifier
     fake_classfication = c_net(f_net(fake_faceB))
-    C_fake_loss = identity_D_loss(real_classification, voiceB_label)
+    C_fake_loss = identity_D_loss(F.log_softmax(real_classification, dim=1), voiceB_label)
     # C_fake_loss = F.nll_loss(F.log_softmax(fake_classfication, 1), voice_label)
 
     # GD_fake_loss = F.binary_cross_entropy(torch.sigmoid(D_fake), real_label)
     # GC_fake_loss = F.nll_loss(F.log_softmax(fake_classfication, 1), voice_label)
 
     # 3. Train with L2 loss
-    # TODO: l2 here necessary ??  faceA needs to be changed to faceB
-    l2loss = l2_loss_G(fake_faceB, faceA)
+    # TODO: l2 here necessary ??
+    l2loss = l2_loss_G(fake_faceB, faceB)
     # l2loss = l2_loss_G(fake_faceB, faceB)
 
     # 4. Train with consistency loss
     # TODO: to be tested, after getting embedding_A and
     # scaled_fake = fake_face * 2 - 1
-    # fake_faceA = g_net(fake_faceB, embedding_A)
-    # consistency_loss = l2_loss_G(fake_faceA, faceA)
+    # get voice embeddings
+    embedding_A = e_net(voiceB)
+    embedding_A = F.normalize(embedding_A).view(embedding_A.size()[0], -1)
+    fake_faceA = g_net(fake_faceB, embedding_A)
+    consistency_loss = l2_loss_G(fake_faceA, faceA)
 
     # backprop
-    G_loss = D_fake_loss + C_fake_loss + l2loss
+    G_loss = D_fake_B_loss + C_fake_loss + l2loss + consistency_loss
     G_loss.backward()
-    GD_fake.update(D_fake_loss.item())
-    GC_fake.update(C_fake_loss.item())
-    G_l2_fake.update(l2loss.item())
+    meter_GD_fake.update(D_fake_B_loss.item())
+    meter_GC_fake.update(C_fake_loss.item())
+    meter_G_L2_fake.update(l2loss.item())
     g_optimizer.step()
 
     batch_time.update(time.time() - start_time)
 
     # print status
     if it % NETWORKS_PARAMETERS['print_stat_freq'] == 0:
-        print(iteration, data_time, batch_time, 
-              D_real, D_fake, C_real, GD_fake, GC_fake)
+        print(iteration, data_time, batch_time,
+              meter_D_real, meter_D_fake, meter_C_real, meter_GD_fake, meter_GC_fake)
         data_time.reset()
         batch_time.reset()
-        D_real.reset()
-        D_fake.reset()
-        C_real.reset()
-        GD_fake.reset()
-        GC_fake.reset()
+        meter_D_real.reset()
+        meter_D_fake.reset()
+        meter_C_real.reset()
+        meter_GD_fake.reset()
+        meter_GC_fake.reset()
 
         # snapshot
         save_model(g_net, NETWORKS_PARAMETERS['g']['model_path'])
@@ -190,8 +202,8 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     if min_g_loss == None or G_loss < min_g_loss:
         min_g_loss = G_loss
         torch.save(g_net, 'G.pt')
-    if min_g_loss == None or D_loss < min_d_loss:
-        min_g_loss = D_loss
+    if min_d_loss == None or D_loss < min_d_loss:
+        min_d_loss = D_loss
         torch.save(d_net, 'FD.pt')
 
     iteration.update(1)
