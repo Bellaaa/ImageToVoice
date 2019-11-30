@@ -2,6 +2,7 @@ import os
 import time
 import torch
 import torch.nn.functional as F
+from torch.autograd import Variable
 
 from torch.utils.data import DataLoader
 from config import DATASET_PARAMETERS, NETWORKS_PARAMETERS
@@ -45,10 +46,6 @@ c_net, c_optimizer = get_network('c', NETWORKS_PARAMETERS, train=True)  # classi
 
 d_scheduler = torch.optim.lr_scheduler.StepLR(d_optimizer, step_size=1, gamma=0.96)
 g_scheduler = torch.optim.lr_scheduler.StepLR(g_optimizer, step_size=1, gamma=0.96)
-
-# label for real/fake faces
-# real_label = torch.full((DATASET_PARAMETERS['batch_size'], 1), 1)
-# fake_label = torch.full((DATASET_PARAMETERS['batch_size'], 1), 0)
 
 # Meters for recording the training status
 iteration = Meter('Iter', 'sum', ':5d')
@@ -108,7 +105,9 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     #            TRAIN THE DISCRIMINATOR
     # ============================================
 
-    # d_optimizer.zero_grad()
+    # if it != 1 and it % 10 == 1:
+    f_optimizer.zero_grad()
+    d_optimizer.zero_grad()
     c_optimizer.zero_grad()
 
     # 1. Train with real images
@@ -116,14 +115,13 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     D_real_A_loss = true_D_loss(torch.sigmoid(D_real_A))
 
     # 2. Train with fake images
-    D_fake_B = d_net(f_net(fake_faceB.detach()))
-    # D_fake = d_net(f_net(fake_face))  # TODO: is detach necessary here ???
+    D_fake_B = d_net(f_net(fake_faceB))
+    # D_fake = d_net(f_net(fake_face.detach()))  # TODO: is detach necessary here ???
     D_fake_B_loss = fake_D_loss(torch.sigmoid(D_fake_B))
 
     # 3. Train with identity / gender classification
     real_classification = c_net(f_net(faceA))
     C_real_loss = identity_D_loss(F.log_softmax(real_classification, dim=1), faceA_label)
-    # C_real_loss = F.nll_loss(F.log_softmax(real_classification, 1), face_label)  # TODO: why this loss?
 
     # D_real_loss = F.binary_cross_entropy(torch.sigmoid(D_real), real_label)
     # D_fake_loss = F.binary_cross_entropy(torch.sigmoid(D_fake), fake_label)
@@ -138,47 +136,48 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     D_loss.backward()
     f_optimizer.step()
     c_optimizer.step()
-    if it % 10 == 0:
-        d_optimizer.step()
-        d_optimizer.zero_grad()
+    # if it % 10 == 0:
+    d_optimizer.step()
+    # d_optimizer.zero_grad()
 
     # =========================================
     #            TRAIN THE GENERATOR
     # =========================================
     g_optimizer.zero_grad()
 
+    # 0. get generated faces
+    fake_faceB = g_net(faceA, embedding_B)
+
     # 1. Train with discriminator
     D_fake_B = d_net(f_net(fake_faceB))
-    D_fake_B_loss = true_D_loss(torch.sigmoid(D_fake_B))
+    D_B_loss = true_D_loss(torch.sigmoid(D_fake_B))
 
     # 2. Train with classifier
     fake_classfication = c_net(f_net(fake_faceB))
-    C_fake_loss = identity_D_loss(F.log_softmax(real_classification, dim=1), voiceB_label)
+    C_fake_loss = identity_D_loss(F.log_softmax(fake_classfication, dim=1), voiceB_label)
     # C_fake_loss = F.nll_loss(F.log_softmax(fake_classfication, 1), voice_label)
 
     # GD_fake_loss = F.binary_cross_entropy(torch.sigmoid(D_fake), real_label)
     # GC_fake_loss = F.nll_loss(F.log_softmax(fake_classfication, 1), voice_label)
 
     # 3. Train with L2 loss
-    # TODO: l2 here necessary ??
     l2loss = l2_loss_G(fake_faceB, faceB)
-    # l2loss = l2_loss_G(fake_faceB, faceB)
 
     # 4. Train with consistency loss
-    # TODO: to be tested, after getting embedding_A and
+    # TODO: to be tested, after getting embedding_A and ??
     # scaled_fake = fake_face * 2 - 1
     # get voice embeddings
-    embedding_A = e_net(voiceB)
+    embedding_A = e_net(voiceA)
     embedding_A = F.normalize(embedding_A).view(embedding_A.size()[0], -1)
     fake_faceA = g_net(fake_faceB, embedding_A)
     consistency_loss = l2_loss_G(fake_faceA, faceA)
 
     # backprop
-    G_loss = D_fake_B_loss + C_fake_loss + l2loss + consistency_loss
+    G_loss = D_B_loss + C_fake_loss + l2loss + consistency_loss
     G_loss.backward()
-    meter_GD_fake.update(D_fake_B_loss.item())
+    meter_GD_fake.update(D_B_loss.item())
     meter_GC_fake.update(C_fake_loss.item())
-    meter_G_L2_fake.update(l2loss.item())
+    meter_G_L2_fake.update(l2loss.item() + consistency_loss.item())
     g_optimizer.step()
 
     batch_time.update(time.time() - start_time)

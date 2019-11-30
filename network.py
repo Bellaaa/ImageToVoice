@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 
 # ============ Unet Components ===============
+
 class SigmoidLinearMask(nn.Module):
     def __init__(self, shape, embedding_dim=64):
         super(SigmoidLinearMask, self).__init__()
@@ -46,6 +47,8 @@ class Conv2dWMask(nn.Module):
         elif gender == 'f':
             gender = -1 * torch.ones((1)).to(device)
         """
+        print("voice embedding size: ")
+        print(embedding.size())
         embedding = torch.mean(embedding, dim=0)  # TODO: can NOT use mean function!
 
         new_weight = self.wlinear(self.conv.weight, embedding)
@@ -224,7 +227,7 @@ class UNet(nn.Module):
         x4 = self.down3(x3)
         # print('x4 shape = ', x4.shape)
         x5 = self.down4(x4)
-        # print('x5 shape = ', x5.shape)
+        print('UNet x5 shape = ', x5.shape)
         # print('\n')
         x = self.up1(x5, x4, embedding)
         # print('x6 shape = ', x.shape)
