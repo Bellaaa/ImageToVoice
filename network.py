@@ -6,6 +6,35 @@ import torch.nn.functional as F
 
 
 # ============ Unet Components ===============
+class AttentionMask(nn.Module):
+    """ Create attention mask for image embedding (key),
+    letting attention score be conditional on voice embedding (query).
+    The final output is modified image embedding (context value) ingested by the next layer.
+    """
+    def __init__(self):
+        super(AttentionMask, self).__init__()
+        self.act = nn.Softmax(dim=-1)
+
+    def forward(self, key, query):
+        assert key.size(0) == query.size(0)
+        shape = key.shape  # batch_size == shape[0]
+
+        # 1. create attention matrix where a_ij represents
+        # how similar key_i is to query_j
+        # key --> (bs, #channel * w * h), query --> (bs, #channel * 1 * 1)
+        # note that query feature_dim=64
+        att = torch.einsum('ij,ik->ijk',
+                           [key.view(shape[0], -1), query.view(shape[0], -1)])
+
+        # 2. softmax activation on each row, namely for all j corresponding to each i
+        att = self.act(att)
+
+        # 3. generate attention mask, conditional on query
+        att = torch.einsum('ijk,ikl->ijl', [att, query.view(shape[0], -1, 1)])
+
+        # 4. resize and generate context value
+        return key * att.view(shape)
+
 
 class SigmoidLinearMask(nn.Module):
     def __init__(self, shape, embedding_dim=64):
@@ -37,6 +66,7 @@ class Conv2dWMask(nn.Module):
         self.bshape = [out_c]
         self.wlinear = SigmoidLinearMask(self.wshape, embedding_dim)
         self.blinear = SigmoidLinearMask(self.bshape, embedding_dim)
+        self.mask = AttentionMask()
 
     def forward(self, x, embedding):
         # shape of voice_embedding: (batch_size, 64)
@@ -47,14 +77,16 @@ class Conv2dWMask(nn.Module):
         elif gender == 'f':
             gender = -1 * torch.ones((1)).to(device)
         """
-        print("voice embedding size: ")
-        print(embedding.size())
-        embedding = torch.mean(embedding, dim=0)  # TODO: can NOT use mean function!
 
+        # embedding = torch.mean(embedding, dim=0)  # TODO: can NOT use mean function!
+
+        """
         new_weight = self.wlinear(self.conv.weight, embedding)
         new_b = self.blinear(self.conv.bias, embedding)
         output = F.conv2d(x, new_weight, new_b, padding=self.conv.padding)
-        return output
+        """
+        output = self.conv(x)
+        return self.mask(output, embedding)
 
 
 class DoubleConv(nn.Module):
