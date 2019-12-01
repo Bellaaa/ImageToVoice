@@ -13,7 +13,8 @@ class AttentionMask(nn.Module):
     """
     def __init__(self):
         super(AttentionMask, self).__init__()
-        self.act = nn.Softmax(dim=-1)
+        self.act1 = nn.Softmax(dim=-1)
+        self.act2 = nn.Sigmoid()
 
     def forward(self, key, query):
         assert key.size(0) == query.size(0)
@@ -27,12 +28,15 @@ class AttentionMask(nn.Module):
                            [key.view(shape[0], -1), query.view(shape[0], -1)])
 
         # 2. softmax activation on each row, namely for all j corresponding to each i
-        att = self.act(att)
+        att = self.act1(att)
 
         # 3. generate attention mask, conditional on query
         att = torch.einsum('ijk,ikl->ijl', [att, query.view(shape[0], -1, 1)])
 
-        # 4. resize and generate context value
+        # 4. sigmoid activation on each row i (one element)
+        att = self.act2(att)
+
+        # 5. resize and generate context value
         return key * att.view(shape)
 
 

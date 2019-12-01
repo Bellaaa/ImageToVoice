@@ -115,7 +115,7 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     D_real_A_loss = true_D_loss(torch.sigmoid(D_real_A))
 
     # 2. Train with fake images
-    D_fake_B = d_net(f_net(fake_faceB))
+    D_fake_B = d_net(f_net(fake_faceB).detach())
     # D_fake = d_net(f_net(fake_face.detach()))  # TODO: is detach necessary here ???
     D_fake_B_loss = fake_D_loss(torch.sigmoid(D_fake_B))
 
@@ -183,7 +183,7 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     batch_time.update(time.time() - start_time)
 
     # print status
-    if it % NETWORKS_PARAMETERS['print_stat_freq'] == 0:
+    if it % DATASET_PARAMETERS['print_stat_freq'] == 0:
         print(iteration, data_time, batch_time,
               meter_D_real, meter_D_fake, meter_C_real, meter_GD_fake, meter_GC_fake)
         data_time.reset()
