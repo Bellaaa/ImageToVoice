@@ -98,8 +98,10 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     # scaled_images = face * 2 - 1
 
     # get voice embeddings
-    embedding_B = e_net(voiceB)
-    embedding_B = F.normalize(embedding_B).view(embedding_B.size()[0], -1)
+    # embedding_B = e_net(voiceB)
+    embedding_B = voiceB  # TODO: changed to include time domain (dim=2)
+    embedding_B = F.normalize(embedding_B, dim=1) # .view(embedding_B.size()[0], -1)
+
     # introduce some permutations to voice --> deprecated
     # embeddings = embeddings + noise
     # embeddings = F.normalize(embeddings)
@@ -173,9 +175,11 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     # 4. Train with consistency loss
     # TODO: to be tested, after getting embedding_A and ??
     # scaled_fake = fake_face * 2 - 1
+
     # get voice embeddings
-    embedding_A = e_net(voiceA)
-    embedding_A = F.normalize(embedding_A).view(embedding_A.size()[0], -1)
+    # embedding_A = e_net(voiceA)
+    embedding_A = voiceA
+    embedding_A = F.normalize(embedding_A, dim=1)  # .view(embedding_A.size()[0], -1)
     fake_faceA = g_net(fake_faceB, embedding_A)
     consistency_loss = l2_loss_G(fake_faceA, faceA)
 

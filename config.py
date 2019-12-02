@@ -29,7 +29,7 @@ DATASET_PARAMETERS = {
     # dataloader
     'voice_dataset': VoiceDataset,
     'face_dataset': FaceDataset,
-    'batch_size': 8,  # 8 for attention, T4 GPU;
+    'batch_size': 64,  # 8 for attention mask, T4 GPU; 64 for attention layer V100 GPU 16G
     'nframe_range': [300, 800],
     'workers_num': 1,
     'collate_fn': get_collate_fn,

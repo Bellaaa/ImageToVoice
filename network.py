@@ -6,7 +6,58 @@ import torch.nn.functional as F
 
 
 # ============ Unet Components ===============
-class AttentionMask(nn.Module):
+class ScaledDotProductAttention(nn.Module):
+    def __init__(self, attn_dropout=0.0):
+        super(ScaledDotProductAttention, self).__init__()
+        self.act = nn.Softmax(dim=-1)
+        self.dropout = nn.Dropout(attn_dropout)
+
+    def forward(self, k, q, v):
+        # key == value: (batch_size, 64, T)
+        # query: (batch_size, 64, 1)
+        # returned context value: (batch_size, 64, 1)
+        assert k.size(0) == q.size(0)
+
+        # 1. get attention score
+        att = torch.einsum('ijk,ikl->ijl', [k.permute(0, 2, 1), q])
+        att = att.view(k.size(0), 1, -1)
+        att = self.act(att)
+        att = self.dropout(att)
+        att = torch.einsum('ijk,ikl->ijl', [att, v.permute(0, 2, 1)])
+        return att.view(k.size(0), -1, 1)
+
+
+class AttentionLayer(nn.Module):
+    def __init__(self, in_channel, out_channel, kernel_size, padding, key_channel=64, attn_dropout=0.0):
+        super(AttentionLayer, self).__init__()
+        # self.original_channel = original_channel
+        # self.key_channel = key_channel
+        # self.out_channel = original_channel + key_channel
+
+        self.conv1 = nn.Conv2d(in_channel, key_channel, kernel_size=1)
+        self.attention = ScaledDotProductAttention(attn_dropout)
+        self.conv2 = nn.Conv2d(in_channel + key_channel, out_channel,
+                               kernel_size=kernel_size, padding=padding)
+
+    def forward(self, img_embedding, v_embedding):
+        shape = img_embedding.shape
+        query = self.conv1(img_embedding)
+        # v_embedding = v_embedding.squeeze(-1)
+
+        row = []
+        for i in range(shape[-1]):
+            col = []
+            for j in range(shape[-2]):
+                q = query[:, :, i, j].unsqueeze(-1) # .squeeze(-1)
+                att = self.attention(v_embedding, q, v_embedding)
+                col.append(att)
+            tensor_row = torch.cat(col, dim=-1)
+            row.append(tensor_row.unsqueeze(-1))
+        value = torch.cat(row, dim=-1)
+        value = torch.cat([img_embedding, value], dim=1)
+        return self.conv2(value)
+
+class AttentionMask(nn.Module):  # deprecated
     """ Create attention mask for image embedding (key),
     letting attention score be conditional on voice embedding (query).
     The final output is modified image embedding (context value) ingested by the next layer.
@@ -97,33 +148,36 @@ class Conv2dWMask(nn.Module):
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
 
-    def __init__(self, in_channels, out_channels, mode='up', concat=False):
+    def __init__(self, in_channels, out_channels, mode='up', attention=False):
         super().__init__()
         self.mode = mode
+        self.attention = attention
         if mode == 'down':
             self.double_conv = self._double_conv(in_channels, out_channels)
         else:
-            self.double_conv = self._double_conv(in_channels, out_channels)
-            """
-            self.conv1 = Conv2dWMask(in_channels, out_channels, kernel_size=3, padding=1)
-            self.bn1 = nn.BatchNorm2d(out_channels)
-            self.relu1 = nn.ReLU(inplace=True)
-            self.conv2 = Conv2dWMask(out_channels, out_channels, kernel_size=3, padding=1)
-            self.bn2 = nn.BatchNorm2d(out_channels)
-            self.relu2 = nn.ReLU(inplace=True)
-            """
-        """
-        if concat:
-            self.double_conv = self.double_conv_v2(in_channels, out_channels)
-        else:
-            self.double_conv = self.double_conv(in_channels, out_channels)
-        """
+            # self.double_conv = self._double_conv(in_channels, out_channels)
+            """ """
+            if attention:
+                self.conv1 = AttentionLayer(in_channels, out_channels, kernel_size=3, padding=1)
+                self.bn1 = nn.BatchNorm2d(out_channels)
+                self.relu1 = nn.ReLU(inplace=True)
+                self.conv2 = AttentionLayer(out_channels, out_channels, kernel_size=3, padding=1)
+                self.bn2 = nn.BatchNorm2d(out_channels)
+                self.relu2 = nn.ReLU(inplace=True)
+            else:
+                self.conv1 = Conv2dWMask(in_channels, out_channels, kernel_size=3, padding=1)
+                self.bn1 = nn.BatchNorm2d(out_channels)
+                self.relu1 = nn.ReLU(inplace=True)
+                self.conv2 = Conv2dWMask(out_channels, out_channels, kernel_size=3, padding=1)
+                self.bn2 = nn.BatchNorm2d(out_channels)
+                self.relu2 = nn.ReLU(inplace=True)
 
     def forward(self, x, embedding=None):
         if self.mode == 'down':
             return self.double_conv(x)
         else:
-            """
+            # return self.double_conv(x)
+            """ """
             out = self.conv1(x, embedding)
             out = self.bn1(out)
             out = self.relu1(out)
@@ -131,8 +185,6 @@ class DoubleConv(nn.Module):
             out = self.bn2(out)
             out = self.relu2(out)
             return out
-            """
-            return self.double_conv(x)
 
     def _double_conv_w_mask(self, in_channels, out_channels):
         return nn.Sequential(
@@ -194,8 +246,7 @@ class Up(nn.Module):
         else:
             self.up = nn.ConvTranspose2d(in_channels // 2, in_channels // 2, kernel_size=2, stride=2)
 
-        self.conv = DoubleConv(in_channels + 64, out_channels, mode='up')
-        # self.linear = nn.Linear() #
+        self.conv = DoubleConv(in_channels, out_channels, mode='up', attention=True)
 
     def forward(self, x1, x2, label):
         """
@@ -212,13 +263,6 @@ class Up(nn.Module):
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
 
-        # 2. pad label
-        label = label.unsqueeze(-1).unsqueeze(-1)
-        diffY = x2.size()[2] - label.size()[2]
-        diffX = x2.size()[3] - label.size()[3]
-        label = F.pad(label, [diffX // 2, diffX - diffX // 2,
-                        diffY // 2, diffY - diffY // 2], mode='replicate')
-
         # if type(label) == int:
         #     if label == 0:
         #         labels = torch.zeros((x1.shape[0], 2*x1.shape[1], x1.shape[2], x1.shape[3])).to(self.device)
@@ -233,11 +277,9 @@ class Up(nn.Module):
         # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
 
-        x = torch.cat([x2, x1, label], dim=1)
-
-        return self.conv(x)
-        # x = self.linear(x)
-        # return self.conv(x, embedding=label)
+        x = torch.cat([x2, x1], dim=1)
+        # return self.conv(x)
+        return self.conv(x, embedding=label)
 
 
 class OutConv(nn.Module):
@@ -317,7 +359,7 @@ class VoiceEmbedNet(nn.Module):
 
     def forward(self, x):
         x = self.model(x)
-        x = F.avg_pool1d(x, x.size()[2], stride=1)
+        # x = F.avg_pool1d(x, x.size()[2], stride=1)
         x = x.view(x.size()[0], -1, 1, 1)
         return x
 
