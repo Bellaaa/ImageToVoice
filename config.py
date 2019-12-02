@@ -9,6 +9,7 @@ DATASET_PARAMETERS = {
     # TRAINING CONFIGURATIONS
     'num_batches': 50000,
     'print_stat_freq': 50,
+    'save_freq': 500,
 
     # meta data provided by voxceleb1 dataset
     'meta_file': 'data/vox1_meta.csv',
@@ -28,7 +29,7 @@ DATASET_PARAMETERS = {
     # dataloader
     'voice_dataset': VoiceDataset,
     'face_dataset': FaceDataset,
-    'batch_size': 64,
+    'batch_size': 8,  # 8 for attention, T4 GPU;
     'nframe_range': [300, 800],
     'workers_num': 1,
     'collate_fn': get_collate_fn,

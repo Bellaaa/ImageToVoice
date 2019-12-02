@@ -54,6 +54,12 @@ def save_model(net, model_path):
     model_dir = os.path.dirname(model_path)
     if not os.path.exists(model_dir):
        os.makedirs(model_dir)
+    torch.save(net, model_path)
+
+def save_model_state_dict(net, model_path):
+    model_dir = os.path.dirname(model_path)
+    if not os.path.exists(model_dir):
+       os.makedirs(model_dir)
     torch.save(net.state_dict(), model_path)
 
 def rm_sil(voice_file, vad_obj):

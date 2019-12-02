@@ -34,10 +34,11 @@ class AttentionMask(nn.Module):
         att = torch.einsum('ijk,ikl->ijl', [att, query.view(shape[0], -1, 1)])
 
         # 4. sigmoid activation on each row i (one element)
-        att = self.act2(att)
+        # att = self.act2(att)
 
         # 5. resize and generate context value
-        return key * att.view(shape)
+        # return key * att.view(shape)
+        return att.view(shape)
 
 
 class SigmoidLinearMask(nn.Module):
@@ -66,10 +67,10 @@ class Conv2dWMask(nn.Module):
     def __init__(self, in_c, out_c, kernel_size, padding, embedding_dim=64):
         super().__init__()
         self.conv = nn.Conv2d(in_c, out_c, kernel_size=kernel_size, padding=padding)
-        self.wshape = [out_c, in_c, kernel_size, kernel_size]
-        self.bshape = [out_c]
-        self.wlinear = SigmoidLinearMask(self.wshape, embedding_dim)
-        self.blinear = SigmoidLinearMask(self.bshape, embedding_dim)
+        # self.wshape = [out_c, in_c, kernel_size, kernel_size]
+        # self.bshape = [out_c]
+        # self.wlinear = SigmoidLinearMask(self.wshape, embedding_dim)
+        # self.blinear = SigmoidLinearMask(self.bshape, embedding_dim)
         self.mask = AttentionMask()
 
     def forward(self, x, embedding):
@@ -102,13 +103,15 @@ class DoubleConv(nn.Module):
         if mode == 'down':
             self.double_conv = self._double_conv(in_channels, out_channels)
         else:
-            # self.double_conv = self._double_conv_w_mask(in_channels, out_channels)
+            self.double_conv = self._double_conv(in_channels, out_channels)
+            """
             self.conv1 = Conv2dWMask(in_channels, out_channels, kernel_size=3, padding=1)
             self.bn1 = nn.BatchNorm2d(out_channels)
             self.relu1 = nn.ReLU(inplace=True)
             self.conv2 = Conv2dWMask(out_channels, out_channels, kernel_size=3, padding=1)
             self.bn2 = nn.BatchNorm2d(out_channels)
             self.relu2 = nn.ReLU(inplace=True)
+            """
         """
         if concat:
             self.double_conv = self.double_conv_v2(in_channels, out_channels)
@@ -120,6 +123,7 @@ class DoubleConv(nn.Module):
         if self.mode == 'down':
             return self.double_conv(x)
         else:
+            """
             out = self.conv1(x, embedding)
             out = self.bn1(out)
             out = self.relu1(out)
@@ -127,6 +131,8 @@ class DoubleConv(nn.Module):
             out = self.bn2(out)
             out = self.relu2(out)
             return out
+            """
+            return self.double_conv(x)
 
     def _double_conv_w_mask(self, in_channels, out_channels):
         return nn.Sequential(
@@ -188,7 +194,8 @@ class Up(nn.Module):
         else:
             self.up = nn.ConvTranspose2d(in_channels // 2, in_channels // 2, kernel_size=2, stride=2)
 
-        self.conv = DoubleConv(in_channels, out_channels, mode='up')
+        self.conv = DoubleConv(in_channels + 64, out_channels, mode='up')
+        # self.linear = nn.Linear() #
 
     def forward(self, x1, x2, label):
         """
@@ -199,11 +206,18 @@ class Up(nn.Module):
         """
         x1 = self.up(x1)
         # input is CHW
+        # 1. pad x1
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
-
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
+
+        # 2. pad label
+        label = label.unsqueeze(-1).unsqueeze(-1)
+        diffY = x2.size()[2] - label.size()[2]
+        diffX = x2.size()[3] - label.size()[3]
+        label = F.pad(label, [diffX // 2, diffX - diffX // 2,
+                        diffY // 2, diffY - diffY // 2], mode='replicate')
 
         # if type(label) == int:
         #     if label == 0:
@@ -219,8 +233,11 @@ class Up(nn.Module):
         # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
 
-        x = torch.cat([x2, x1], dim=1)
-        return self.conv(x, embedding=label)
+        x = torch.cat([x2, x1, label], dim=1)
+
+        return self.conv(x)
+        # x = self.linear(x)
+        # return self.conv(x, embedding=label)
 
 
 class OutConv(nn.Module):

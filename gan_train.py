@@ -1,14 +1,16 @@
 import os
 import time
+from datetime import datetime
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
+# from torchsummary import summary
 
 from torch.utils.data import DataLoader
 from config import DATASET_PARAMETERS, NETWORKS_PARAMETERS
 from parse_dataset import get_dataset
 from network import get_network
-from utils import Meter, cycle, save_model
+from utils import Meter, cycle, save_model, save_model_state_dict
 from loss import *
 from dataset import reload_batch_face, reload_batch_voice
 
@@ -44,8 +46,10 @@ g_net, g_optimizer = get_network('u', NETWORKS_PARAMETERS, train=True)  # unet
 d_net, d_optimizer = get_network('d', NETWORKS_PARAMETERS, train=True)  # discriminator
 c_net, c_optimizer = get_network('c', NETWORKS_PARAMETERS, train=True)  # classifier, train=False
 
-d_scheduler = torch.optim.lr_scheduler.StepLR(d_optimizer, step_size=1, gamma=0.96)
-g_scheduler = torch.optim.lr_scheduler.StepLR(g_optimizer, step_size=1, gamma=0.96)
+# d_scheduler = torch.optim.lr_scheduler.StepLR(d_optimizer, step_size=1, gamma=0.96)
+# g_scheduler = torch.optim.lr_scheduler.StepLR(g_optimizer, step_size=1, gamma=0.96)
+# summary(g_net, input_size=(3, 64, 64))
+
 
 # Meters for recording the training status
 iteration = Meter('Iter', 'sum', ':5d')
@@ -63,6 +67,9 @@ meter_G_L2_fake = Meter('G_l2_fake', 'avg', ':3.2f')
 print('Training models...')
 min_g_loss = None
 min_d_loss = None
+str_timestamp = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+f_log = 'training_log_{}'.format(str_timestamp)
+
 for it in range(DATASET_PARAMETERS['num_batches']):
     # data
     start_time = time.time()
@@ -184,8 +191,14 @@ for it in range(DATASET_PARAMETERS['num_batches']):
 
     # print status
     if it % DATASET_PARAMETERS['print_stat_freq'] == 0:
-        print(iteration, data_time, batch_time,
-              meter_D_real, meter_D_fake, meter_C_real, meter_GD_fake, meter_GC_fake)
+        str_log = str(iteration) + str(data_time) + str(batch_time) + str(meter_D_real) + \
+                  str(meter_D_fake) + str(meter_C_real) + str(meter_GD_fake) + str(meter_GC_fake)
+        # print(iteration, data_time, batch_time,
+        #       meter_D_real, meter_D_fake, meter_C_real, meter_GD_fake, meter_GC_fake)
+        print(str_log)
+        with open(f_log, 'a+') as f:
+            f.write(str_log)
+
         data_time.reset()
         batch_time.reset()
         meter_D_real.reset()
@@ -194,16 +207,27 @@ for it in range(DATASET_PARAMETERS['num_batches']):
         meter_GD_fake.reset()
         meter_GC_fake.reset()
 
-        # snapshot
-        save_model(g_net, NETWORKS_PARAMETERS['g']['model_path'])
+    # save intermediate models for visualization purpose
+    if it % DATASET_PARAMETERS['save_freq'] == 0:
+        f_cur_model = '_iter{}.pkl'.format(it)
+        f_cur_model = NETWORKS_PARAMETERS['u']['model_path'].split('.')[0] + f_cur_model
+        save_model_state_dict(g_net, f_cur_model)
 
-    # save model for debugging purpose
-    if min_g_loss == None or G_loss < min_g_loss:
+    del voiceB_label
+    del voiceB
+    del faceA_label
+    del faceA
+    del voiceA
+    del faceB
+
+    # save the best model
+    """ """
+    if min_g_loss is None or G_loss < min_g_loss:
         min_g_loss = G_loss
-        torch.save(g_net, 'G.pt')
-    if min_d_loss == None or D_loss < min_d_loss:
+        save_model(g_net, NETWORKS_PARAMETERS['u']['model_path'])
+    if min_d_loss is None or D_loss < min_d_loss:
         min_d_loss = D_loss
-        torch.save(d_net, 'FD.pt')
+        save_model(d_net, NETWORKS_PARAMETERS['d']['model_path'])
 
     iteration.update(1)
 
