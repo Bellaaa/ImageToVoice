@@ -4,6 +4,7 @@ from datetime import datetime
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
+from torchvision import transforms
 # from torchsummary import summary
 
 from torch.utils.data import DataLoader
@@ -20,9 +21,18 @@ voice_list, face_list, id_class_num, voice_dict, face_dict = get_dataset(DATASET
 NETWORKS_PARAMETERS['c']['output_channel'] = id_class_num
 
 print('Preparing the datasets...')
+transform1 = transforms.Compose([
+    transforms.Resize((64, 64)),
+    transforms.RandomGrayscale(p=0.4),
+    transforms.RandomHorizontalFlip(),
+    transforms.ColorJitter(brightness=1, contrast=1, saturation=1, hue=0.5),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
+
 voice_dataset = DATASET_PARAMETERS['voice_dataset'](voice_list,
                                DATASET_PARAMETERS['nframe_range'])
-face_dataset = DATASET_PARAMETERS['face_dataset'](face_list)
+face_dataset = DATASET_PARAMETERS['face_dataset'](face_list, transform1)
 
 print('Preparing the dataloaders...')
 collate_fn = DATASET_PARAMETERS['collate_fn'](DATASET_PARAMETERS['nframe_range'])
@@ -42,7 +52,10 @@ print('Initializing networks...')
 e_net, e_optimizer = get_network('e', NETWORKS_PARAMETERS, train=False)  # voice embedding
 # g_net, g_optimizer = get_network('g', NETWORKS_PARAMETERS, train=True)
 f_net, f_optimizer = get_network('f', NETWORKS_PARAMETERS, train=True)
-g_net, g_optimizer = get_network('u', NETWORKS_PARAMETERS, train=True)  # unet
+if DATASET_PARAMETERS['train_mode'] == 'resume':
+    g_net, g_optimizer = get_network('u', NETWORKS_PARAMETERS, train=True, pretrained=True)  # unet
+else:
+    g_net, g_optimizer = get_network('u', NETWORKS_PARAMETERS, train=True)  # unet
 d_net, d_optimizer = get_network('d', NETWORKS_PARAMETERS, train=True)  # discriminator
 c_net, c_optimizer = get_network('c', NETWORKS_PARAMETERS, train=True)  # classifier, train=False
 
@@ -81,7 +94,7 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     #  need to reuse load_voice and load_face to get corresponding faceB and voiceA
     faceB_items = [face_dict[v_label.item()] for v_label in voiceB_label]
     voiceA_items = [voice_dict[f_label.item()] for f_label in faceA_label]
-    faceB = reload_batch_face(faceB_items)
+    faceB = reload_batch_face(faceB_items, transform1)
     voiceA = reload_batch_voice(voiceA_items, DATASET_PARAMETERS['nframe_range'][1])
     # noise = 0.05 * torch.randn(DATASET_PARAMETERS['batch_size'], 64, 1, 1)  # shape 4d!
 
@@ -95,7 +108,7 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     data_time.update(time.time() - start_time)
 
     # TODO: scale the input images, notice when inference ??
-    # scaled_images = face * 2 - 1
+    faceA = faceA * 2 - 1
 
     # get voice embeddings
     # embedding_B = e_net(voiceB)
@@ -215,7 +228,7 @@ for it in range(DATASET_PARAMETERS['num_batches']):
     if it % DATASET_PARAMETERS['save_freq'] == 0:
         f_cur_model = '_iter{}.pkl'.format(it)
         f_cur_model = NETWORKS_PARAMETERS['u']['model_path'].split('.')[0] + f_cur_model
-        save_model_state_dict(g_net, f_cur_model)
+        save_model(g_net, f_cur_model)
 
     del voiceB_label
     del voiceB

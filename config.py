@@ -10,6 +10,7 @@ DATASET_PARAMETERS = {
     'num_batches': 50000,
     'print_stat_freq': 50,
     'save_freq': 500,
+    'train_mode': 'new', # 'resume',  # or 'new',
 
     # meta data provided by voxceleb1 dataset
     'meta_file': 'data/vox1_meta.csv',
@@ -29,7 +30,9 @@ DATASET_PARAMETERS = {
     # dataloader
     'voice_dataset': VoiceDataset,
     'face_dataset': FaceDataset,
-    'batch_size': 64,  # 8 for attention mask, T4 GPU; 64 for attention layer V100 GPU 16G
+    'batch_size': 128,
+    # 64 for 2 attention layer one V100 GPU 16G,
+    # 128 for 1 attention layer V100 GPU 16G
     'nframe_range': [300, 800],
     'workers_num': 1,
     'collate_fn': get_collate_fn,

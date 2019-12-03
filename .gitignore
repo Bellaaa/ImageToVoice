@@ -9,3 +9,6 @@ config2.py
 *.ipynb
 GenderGAN (1).ipynb
 GeneratorUnet.ipynb
+
+# data
+example_data

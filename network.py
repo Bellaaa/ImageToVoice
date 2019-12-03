@@ -52,8 +52,8 @@ class AttentionLayer(nn.Module):
                 att = self.attention(v_embedding, q, v_embedding)
                 col.append(att)
             tensor_row = torch.cat(col, dim=-1)
-            row.append(tensor_row.unsqueeze(-1))
-        value = torch.cat(row, dim=-1)
+            row.append(tensor_row.unsqueeze(-2))  # row is at [bs, channel, <row>, col] dim=-2
+        value = torch.cat(row, dim=-2)
         value = torch.cat([img_embedding, value], dim=1)
         return self.conv2(value)
 
@@ -162,6 +162,7 @@ class DoubleConv(nn.Module):
                 self.bn1 = nn.BatchNorm2d(out_channels)
                 self.relu1 = nn.ReLU(inplace=True)
                 self.conv2 = AttentionLayer(out_channels, out_channels, kernel_size=3, padding=1)
+                # self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
                 self.bn2 = nn.BatchNorm2d(out_channels)
                 self.relu2 = nn.ReLU(inplace=True)
             else:
@@ -181,6 +182,7 @@ class DoubleConv(nn.Module):
             out = self.conv1(x, embedding)
             out = self.bn1(out)
             out = self.relu1(out)
+            # out = self.conv2(out)
             out = self.conv2(out, embedding)
             out = self.bn2(out)
             out = self.relu2(out)
@@ -423,7 +425,7 @@ class Classifier(nn.Module):
 
 
 # ============ Network Type Switch ===============
-def get_network(net_type, params, train=True):
+def get_network(net_type, params, train=True, pretrained=False):
     net_params = params[net_type]
 
     net = net_params['network'](
@@ -431,8 +433,19 @@ def get_network(net_type, params, train=True):
         net_params['channels'],
         net_params['output_channel'])
 
+    if pretrained:
+        if type(net) == UNet:
+            net = torch.load(net_params['model_path'])
+        else:
+            net.load_state_dict(torch.load(net_params['model_path']))
+
     if params['GPU']:
-        net.cuda()
+        if type(net) == UNet:
+            net = nn.DataParallel(net)  # multiple GPU !!!!!
+
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        net.to(device)
+        # net.cuda()
 
     if train:
         net.train()
@@ -441,6 +454,10 @@ def get_network(net_type, params, train=True):
                                betas=(params['beta1'], params['beta2']))
     else:
         net.eval()
-        net.load_state_dict(torch.load(net_params['model_path']))
+        # net = torch.load(net_params['model_path'])
+        if type(net) == UNet:
+            net = torch.load(net_params['model_path'])
+        else:
+            net.load_state_dict(torch.load(net_params['model_path']))
         optimizer = None
     return net, optimizer
